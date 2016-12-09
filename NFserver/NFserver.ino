@@ -1,73 +1,15 @@
-/* YourDuinoStarter Example:RECEIVE nRF24L01 Joystick data to control Pan Tilt Servos Over Radio.
-   QUESTIONS? terry@yourduino.com
- -WHAT IT DOES:
-  -Receives Joystick Analog Values over a nRF24L01 Radio Link, using the Radiohead library.
-  - Sends Joystick position to 2 servos, usually X,Y to pan-tilt arrangement
-  - TODO! Send the Joystick push-down click to turn Laser on and off
- - SEE the comments after "//" on each line below
- - CONNECTIONS: nRF24L01 Modules See:
- http://arduino-info.wikispaces.com/Nrf24L01-2.4GHz-HowTo
-   1 - GND
-   2 - VCC 3.3V !!! NOT 5V
-   3 - CE to Arduino pin 8
-   4 - CSN to Arduino pin 10
-   5 - SCK to Arduino pin 13
-   6 - MOSI to Arduino pin 11
-   7 - MISO to Arduino pin 12
-   8 - UNUSED
-
-
-   -V2.00 7/12/14 by Noah King
-   Based on examples at http://www.airspayce.com/mikem/arduino/RadioHead/index.html
-*/
-
-/*-----( Import needed libraries )-----*/
-// SEE http://arduino-info.wikispaces.com/Arduino-Libraries  !!
-// NEED the SoftwareServo library installed
-// http://playground.arduino.cc/uploads/ComponentLib/SoftwareServo.zip
-// #include <SoftwareServo.h>  // Regular Servo library creates timer conflict!
-
-// NEED the RadioHead Library installed!
-// http://www.airspayce.com/mikem/arduino/RadioHead/RadioHead-1.23.zip
-#include <RHReliableDatagram.h>
-#include <RH_NRF24.h>
-
 #include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
 
-/*-----( Declare Constants and Pin Numbers )-----*/
-#define CLIENT_ADDRESS     1
-#define SERVER_ADDRESS     2
+#define CE_PIN 8
+#define CSN_PIN 10
 
-#define LaserPIN           6
+const uint64_t pipe = 0xE8E8F0F0E1LL; // Define the transmit pipe
 
-#define ServoMIN_H  0  // Don't go to very end of servo travel
-#define ServoMAX_H  160 // which may not be all the way from 0 to 180. 
-#define ServoMIN_V  0  // Don't go to very end of servo travel
-#define ServoMAX_V  140 // which may not be all the way from 0 to 180. 
+RF24 radio(CE_PIN, CSN_PIN); // Create a Radio
 
-
-/*-----( Declare objects )-----*/
-//SoftwareServo HorizontalServo;
-//SoftwareServo VerticalServo;  // create servo objects to control servos
-
-// Create an instance of the radio driver
-RH_NRF24 RadioDriver;
-
-// Create an instance of a manager object to manage message delivery and receipt, using the driver declared above
-RHReliableDatagram RadioManager(RadioDriver, SERVER_ADDRESS);
-
-/*-----( Declare Variables )-----*/
-int HorizontalJoystickReceived; // Variable to store received Joystick values
-int HorizontalServoPosition;    // variable to store the servo position
-
-int VerticalJoystickReceived;   // Variable to store received Joystick values
-int VerticalServoPosition;      // variable to store the servo position
-
-uint8_t ReturnMessage[] = "JoyStick Data Received";  // 28 MAX
-// Predefine the message buffer here: Don't put this on the stack:
-uint8_t buf[RH_NRF24_MAX_MESSAGE_LEN];
-
-
+int joystick[2];
 int speedPin1 = 3;
 int speedPin2 = 9;
 int motor1APin = 6;
@@ -77,11 +19,30 @@ int motor2BPin = 5;
 int speed1;
 int speed2;
 
-//--------------------------------( SETUP Runs ONCE )-----------------------------------------------------
+
+void forward() {
+  digitalWrite(motor1APin, LOW); // set leg 1 of the H-bridge low
+  digitalWrite(motor2APin, HIGH); // set leg 2 of the H-bridge high
+  digitalWrite(motor1BPin, LOW); // set leg 1 of the H-bridge low
+  digitalWrite(motor2BPin, HIGH); // set leg 2 of the H-bridge high
+}
+
+void backward() {
+  digitalWrite(motor1APin, HIGH); // set leg 1 of the H-bridge low
+  digitalWrite(motor2APin, LOW); // set leg 2 of the H-bridge high
+  digitalWrite(motor1BPin, HIGH); // set leg 1 of the H-bridge low
+  digitalWrite(motor2BPin, LOW); // set leg 2 of the H-bridge high
+}
+
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(9600);
+  delay(1000);
+  Serial.println("starting program......");
 
+  radio.begin();
+  radio.openReadingPipe(1,pipe);
+  radio.startListening();
 
   ////////////////////// setup motors //////////////////////////
   pinMode(speedPin1, OUTPUT);
@@ -92,107 +53,86 @@ void setup()
   pinMode(motor2BPin, OUTPUT);
   speed1 = 0;
   speed2 = 0;
-  
-  if (!RadioManager.init()) // Initialize radio. If NOT "1" received, it failed.
-    Serial.println("init failed");
-  // Defaults after init are 2.402 GHz (channel 2), 2Mbps, 0dBm
 }
 
 
-
-//--------------------------------( LOOP runs continuously )-----------------------------------------------------
 void loop()
 {
-  if (RadioManager.available())
-  {
- // Wait for a message addressed to us from the client
-    uint8_t len = sizeof(buf);
-    uint8_t from;
+    if(radio.available()) {
+      radio.read(joystick, sizeof(joystick));
+    
+      int joystickX = map(joystick[0],0,1023,0,255); // turn value of 0-1023 to 0-180 degrees
+      int joystickY = map(joystick[1],0,1023,0,255);  // turn value of 0-1023 to 0-180 degrees
 
-    //Serial Print the values of joystick
-    if (RadioManager.recvfromAck(buf, &len, &from)) {
-//      Serial.print("got request from : 0x");
-//      Serial.print(from, HEX);
-//      Serial.print(": X = ");
-//      Serial.println(buf[0]);
-//      Serial.print(" Y = ");
-//      Serial.println(buf[1]);
-
-      if(buf[1] <= 123 && buf[0] >= 125) {
+      Serial.print("X:");
+      Serial.println(joystickX);
+      Serial.print("Y:");
+      Serial.println(joystickY);
+//      delay(1000);
+            
+      if(joystickY < 123 && joystickX > 125) {
+        Serial.println("IF 1");
         // put motor in forward motion and left wheel is faster or equal than right wheel
-        digitalWrite(motor1APin, LOW); // set leg 1 of the H-bridge low
-        digitalWrite(motor2APin, HIGH); // set leg 2 of the H-bridge high
-        digitalWrite(motor1BPin, LOW); // set leg 1 of the H-bridge low
-        digitalWrite(motor2BPin, HIGH); // set leg 2 of the H-bridge high
-        speed1 = (123 - buf[1])/128.0 * 255.0;
-//        speed2 = speed1 * (1 - (buf[0] - 125)/128);
-//        Serial.println("IF 1 ");
-//        Serial.print("speed 1: ");
-//        Serial.println(speed1);
-//        Serial.print("speed 2: ");
-//        Serial.println(speed2);
-      } else if(buf[1] <= 123 && buf[0] < 125) {
-        // put motor in forward motion and right wheel is faster than left wheel
-        digitalWrite(motor1APin, LOW); // set leg 1 of the H-bridge low
-        digitalWrite(motor2APin, HIGH); // set leg 2 of the H-bridge high
-        digitalWrite(motor1BPin, LOW); // set leg 1 of the H-bridge low
-        digitalWrite(motor2BPin, HIGH); // set leg 2 of the H-bridge high
-        speed2 = (123 - buf[1])/128.0 * 255.0;
-//        speed1 = speed2 * (1 - (125 - buf[0])/128.0);
-//        Serial.println("IF 2 ");
-//        Serial.print("speed 1: ");
-//        Serial.println(speed1);
-//        Serial.print("speed 2: ");
-//        Serial.println(speed2);
-      } else if(buf[1] > 123 && buf[0] >= 125) {
-        // put motor in backward motion and left wheel is faster or equal than right wheel
-        digitalWrite(motor1APin, HIGH); // set leg 1 of the H-bridge low
-        digitalWrite(motor2APin, LOW); // set leg 2 of the H-bridge high
-        digitalWrite(motor1BPin, HIGH); // set leg 1 of the H-bridge low
-        digitalWrite(motor2BPin, LOW); // set leg 2 of the H-bridge high
-        speed1 = (buf[1] - 123)/132.0 * 255.0;
-//        speed2 = speed1 * (1 - (buf[0] - 125)/128.0);
-//        Serial.println("IF 3 ");
-//        Serial.print("speed 1: ");
-//        Serial.println(speed1);
-//        Serial.print("speed 2: ");
-//        Serial.println(speed2);
-      } else if(buf[1] > 123 && buf[0] < 125) {
-        // put motor in backward motion and right wheel is faster than left wheel
-        digitalWrite(motor1APin, HIGH); // set leg 1 of the H-bridge low
-        digitalWrite(motor2APin, LOW); // set leg 2 of the H-bridge high
-        digitalWrite(motor1BPin, HIGH); // set leg 1 of the H-bridge low
-        digitalWrite(motor2BPin, LOW); // set leg 2 of the H-bridge high
-        speed2 = (buf[1] - 123)/132.0 * 255.0;
-//        speed1 = speed2 * (1 - (125 - buf[0])/128.0);
-//        Serial.println("IF 4 ");
-//        Serial.print("speed 1: ");
-//        Serial.println(speed1);
-//        Serial.print("speed 2: ");
-//        Serial.println(speed2);
-      } else {
-        // put motor in forward motion and left wheel equal to right wheel
-        digitalWrite(motor1APin, LOW); // set leg 1 of the H-bridge low
-        digitalWrite(motor2APin, HIGH); // set leg 2 of the H-bridge high
-        digitalWrite(motor1BPin, LOW); // set leg 1 of the H-bridge low
-        digitalWrite(motor2BPin, HIGH); // set leg 2 of the H-bridge high
-        speed1 = (123 - buf[1])/128.0 * 255.0;
-        speed2 = speed1;
-//        Serial.println("IF 5 ");
-//        Serial.print("speed 1: ");
-//        Serial.println(speed1);
-//        Serial.print("speed 2: ");
-//        Serial.println(speed2);
-      }
+        forward();
+        speed1 = (123 - joystickY)/128.0 * 255.0;
+        speed2 = speed1 * (1 - (joystickX - 125)/128);
 
+      } else if(joystickY < 123 && joystickX < 125) {
+        Serial.println("IF 2");
+        // put motor in forward motion and right wheel is faster than left wheel
+        forward();
+        speed2 = (123 - joystickY)/128.0 * 255.0;
+        speed1 = speed2 * (1 - (125 - joystickX)/128.0);
+      } else if(joystickY <= 30) {
+        forward();
+        speed1 = 255;
+        speed2 = speed1;
+      } else if(joystickY >= 230) {
+        backward();
+        speed1 = 255;
+        speed2 = speed1;
+      } else if(joystickX <= 30) {
+        Serial.println("IF 3");
+        digitalWrite(motor1APin, HIGH); // set leg 1 of the H-bridge low
+        digitalWrite(motor2APin, LOW); // set leg 2 of the H-bridge high
+        digitalWrite(motor1BPin, LOW); // set leg 1 of the H-bridge low
+        digitalWrite(motor2BPin, HIGH); // set leg 2 of the H-bridge high
+        speed1 = 255;
+        speed2 = 255;
+      } else if(joystickX >= 220) {
+        Serial.println("IF 4");
+        // put motor in backward motion and left wheel is faster or equal than right wheel
+        digitalWrite(motor1APin, LOW); // set leg 1 of the H-bridge low
+        digitalWrite(motor2APin, HIGH); // set leg 2 of the H-bridge high
+        digitalWrite(motor1BPin, HIGH); // set leg 1 of the H-bridge low
+        digitalWrite(motor2BPin, LOW); // set leg 2 of the H-bridge high
+        speed1 = 255;
+        speed2 = 255;
+      } else if(joystickY > 123 && joystickX >= 125) {
+        Serial.println("IF 5");
+        // put motor in backward motion and left wheel is faster or equal than right wheel
+        backward();
+        speed1 = (joystickY - 123)/132.0 * 255.0;
+        speed2 = speed1 * (1 - (joystickX - 125)/128.0);
+      } else if(joystickY > 123 && joystickX < 125) {
+        Serial.println("IF 6");
+        // put motor in backward motion and right wheel is faster than left wheel
+        backward();
+        speed2 = (joystickY - 123)/132.0 * 255.0;
+        speed1 = speed2 * (1 - (125 - joystickX)/128.0);
+      } else {
+        Serial.println("IF 7");
+        speed1 = 0;
+        speed2 = speed1;
+      }
+        
       // control the speed 0- 255
       analogWrite(speedPin1, speed1); // output speed as PWM value
       analogWrite(speedPin2, speed2); // output speed as PWM value
 
-      // Send a reply back to the originator client, check for error
-      if (!RadioManager.sendtoWait(ReturnMessage, sizeof(ReturnMessage), from))
-        Serial.println("sendtoWait failed");
-    }// end 'IF Received data Available
-  }// end 'IF RadioManager Available
-
-}// END Main LOOP
+      delay(20);
+    } else {
+      Serial.println("not available");
+    }
+    
+}
